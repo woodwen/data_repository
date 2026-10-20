@@ -6,11 +6,10 @@
 
 | 文件 | 版本 | 用途 |
 | --- | --- | --- |
-| [init-codex-project-v2.1.0.sh](init-codex-project-v2.1.0.sh) | 2.1.0 | 当前使用版本，修复配置检查、就绪状态及文档指引问题 |
-| [init-codex-project.sh](init-codex-project.sh) | 2.0.0 | 保留的原版 |
-| [INIT-CODEX-PROJECT-CHANGELOG.md](INIT-CODEX-PROJECT-CHANGELOG.md) | — | 脚本更新记录、兼容性与验证范围 |
+| [init-codex-project.sh](init-codex-project.sh) | 2.2.0 | 统一入口，包含 2.1.0 修复及重复运行保护 |
+| [CHANGELOG.md](CHANGELOG.md) | — | 脚本更新记录、兼容性与验证范围 |
 
-以下说明对应 **2.1.0**。
+以下说明对应 **2.2.0**。原 `init-codex-project-v2.1.0.sh` 已合并到统一入口，调用旧路径的命令需更新。
 
 ## 环境要求
 
@@ -19,20 +18,20 @@
 - 可访问 npm 和 Skills 来源仓库的网络环境，以及 npm 全局安装目录的写权限。
 - Git 可选；未安装 Git 或当前目录尚未初始化 Git 时，脚本只提示警告。
 
-脚本每次都会安装或更新 `@fission-ai/openspec@latest`，并通过 `skills@latest` 安装项目技能，因此实际依赖版本会随运行时间变化。OpenSpec 安装后，其命令也必须在 `PATH` 中可用。
+脚本每次都会安装或更新 `@fission-ai/openspec@latest`，并通过 `skills@latest` 安装缺失的项目技能，因此实际依赖版本会随运行时间变化。OpenSpec 安装后，其命令也必须在 `PATH` 中可用。
 
 ## 快速开始
 
 进入**目标项目根目录**后运行脚本，将示例路径替换为实际路径：
 
 ```bash
-cd /path/to/your-project && bash /path/to/huangguo/init-codex-project-v2.1.0.sh
+cd /path/to/your-project && bash /path/to/data_repository/init-codex-project.sh
 ```
 
 也可以先把脚本复制到目标项目根目录，再执行：
 
 ```bash
-bash ./init-codex-project-v2.1.0.sh
+bash ./init-codex-project.sh
 ```
 
 初始化目标是运行命令时的当前目录。脚本没有目标目录参数，不会自动切换到脚本所在目录；禁止直接在 `/` 或用户主目录运行。
@@ -41,8 +40,8 @@ bash ./init-codex-project-v2.1.0.sh
 
 1. 检查环境，安装或更新全局 OpenSpec。
 2. 检查 OpenSpec 的全局 `delivery` 设置，允许 `skills` 或 `both`。
-3. 已有 `openspec/config.yaml` 时执行 `openspec update . --force`；否则使用 `agents` 目标、`core` profile 和简体中文指引初始化。
-4. 为 Codex 安装以下项目技能，使用复制模式：`setup-matt-pocock-skills`、`grill-with-docs`、`grilling`、`domain-modeling`、`codebase-design`、`tdd`、`diagnosing-bugs`、`code-review`、`writing-for-agents`。
+3. 已有 `openspec/config.yaml` 时，先检查全局 profile，再执行 `openspec update . --force`；允许 `core`，或包含 `propose`、`apply`、`archive` 的 `custom`。新项目使用 `agents` 目标、`core` profile 和简体中文指引初始化。
+4. 为 Codex 补齐以下项目技能，使用复制模式并保留已有路径：`setup-matt-pocock-skills`、`grill-with-docs`、`grilling`、`domain-modeling`、`codebase-design`、`tdd`、`diagnosing-bugs`、`code-review`、`writing-for-agents`。
 5. 创建缺失的文档和基础文件，检查必需技能、文档及占位标记。
 
 主要产物：
@@ -62,7 +61,7 @@ bash ./init-codex-project-v2.1.0.sh
 └── CHANGELOG.md                    # 占位文档
 ```
 
-已有文档及基础文件会保留；OpenSpec 生成文件和安装的技能会刷新。脚本不会自动提交或推送 Git，也不会自动归档 OpenSpec change。
+已有文档、基础文件及 Matt Pocock 技能会保留；OpenSpec 生成文件仍会刷新。脚本不会自动提交或推送 Git，也不会自动归档 OpenSpec change。
 
 `GLOSSARY.md` / `GLOSSARY-MAP.md` 由后续领域建模按需创建。初始化后运行 `$setup-matt-pocock-skills`，完成技能的项目配置。
 
@@ -102,8 +101,27 @@ openspec config set delivery both
 
 ### 重复运行
 
-可以补齐缺失文档并重新执行检查，但每次都会更新工具及技能。上游 `openspec update` 也可能执行配置迁移；已验证的具体行为见[更新记录](INIT-CODEX-PROJECT-CHANGELOG.md)。
+可以补齐缺失文档及 Matt Pocock 技能，并重新执行检查。已有技能路径即使不完整或为悬空链接也会保留；缺少 `SKILL.md` 时最终检查会报错，需要手动处理。
+
+如需更新某个已有技能，先保存自己的定制内容，再显式执行，例如：
+
+```bash
+npx --yes skills@latest add mattpocock/skills --skill tdd --agent codex --copy --yes
+```
+
+该命令会替换目标技能目录。脚本每次仍会更新全局 OpenSpec 和项目的 OpenSpec 生成文件，上游 `openspec update` 也可能执行配置迁移。
+
+### OpenSpec 自定义 profile 缺少必需流程
+
+已有项目在刷新前会检查全局 profile。若 `custom` 缺少 `propose`、`apply` 或 `archive`，脚本会停止，避免刷新时先删除这些必需技能再报告失败。通过 `openspec config` 补齐 workflows 或选择 `core` 后重跑；这属于全局设置，会影响其他项目。脚本不会自动修改这些设置，检查失败也不会回滚此前的全局安装。
 
 ## 验证范围
 
-2.1.0 已通过 Bash 语法检查、18 项模拟检查，以及本机 OpenSpec 1.12.0 下的 3 项配置检查。全局 npm 升级与联网 Skills 安装在测试中由替身替代，未进行完整联网安装验证。
+运行语法检查和回归测试（需 Bash、Node.js 和 Python 3）：
+
+```bash
+bash -n init-codex-project.sh
+python3 -B -m unittest discover -s tests -v
+```
+
+回归测试在临时目录运行，使用 npm、npx、OpenSpec 替身，不安装工具。真实 OpenSpec 的验证版本及边界见 [CHANGELOG.md](CHANGELOG.md)；未进行完整联网安装验证。

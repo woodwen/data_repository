@@ -4,7 +4,9 @@ set -Eeuo pipefail
 
 # ============================================================
 # Codex Project Initializer
-# Version: 2.0.0
+# Version: 2.2.0
+# Release date: 2026-10-20
+# Update history: CHANGELOG.md
 #
 # Includes:
 # - Node.js/OpenSpec checks
@@ -23,7 +25,7 @@ set -Eeuo pipefail
 # Run this script from the repository root.
 # ============================================================
 
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.2.0"
 PLACEHOLDER_MARKER="PLACEHOLDER:REPLACE_ME"
 
 # ------------------------------------------------------------
@@ -61,7 +63,7 @@ fail() {
 
 create_if_missing() {
   local file="$1"
-  if [ -e "$file" ]; then
+  if [ -e "$file" ] || [ -L "$file" ]; then
     info "Skipped existing file: $file"
     return 1
   fi
@@ -150,11 +152,63 @@ ok "OpenSpec $(openspec --version)"
 
 step "[3/9] Initializing OpenSpec"
 
+# The shared agents target only supports skills. Check before init/update
+# so a global commands-only setting cannot silently omit or remove them.
+if ! OPENSPEC_DELIVERY="$(openspec config get delivery)"; then
+  fail "Cannot read OpenSpec delivery configuration."
+fi
+case "$OPENSPEC_DELIVERY" in
+  skills|both) ;;
+  commands)
+    fail "OpenSpec delivery=commands cannot generate .agents/skills. Set delivery to skills or both (global setting), then rerun: openspec config set delivery both"
+    ;;
+  *)
+    fail "Unsupported OpenSpec delivery value: $OPENSPEC_DELIVERY"
+    ;;
+esac
+
 # Use the shared "agents" target intentionally.
 # Current Codex discovers repository skills from .agents/skills.
 # This keeps OpenSpec and third-party project skills in one repo-level location.
 if [ -f "openspec/config.yaml" ]; then
   info "Existing openspec/config.yaml detected"
+  # Unlike init --profile core, update follows the global profile.
+  # Reject incompatible workflows before update can remove required skills.
+  if ! OPENSPEC_PROFILE="$(openspec config get profile)"; then
+    fail "Cannot read OpenSpec profile configuration."
+  fi
+  case "$OPENSPEC_PROFILE" in
+    core) ;;
+    custom)
+      if ! OPENSPEC_WORKFLOWS="$(openspec config get workflows)"; then
+        fail "Cannot read OpenSpec workflows configuration."
+      fi
+      if ! node - "$OPENSPEC_WORKFLOWS" <<'WORKFLOW_CHECK'
+let workflows;
+try {
+  workflows = JSON.parse(process.argv[2]);
+} catch {
+  console.error("ERROR: OpenSpec workflows must be a JSON array.");
+  process.exit(1);
+}
+if (!Array.isArray(workflows)) {
+  console.error("ERROR: OpenSpec workflows must be a JSON array.");
+  process.exit(1);
+}
+const missing = ["propose", "apply", "archive"].filter(name => !workflows.includes(name));
+if (missing.length > 0) {
+  console.error(`ERROR: OpenSpec custom profile is missing required workflows: ${missing.join(", ")}`);
+  process.exit(1);
+}
+WORKFLOW_CHECK
+      then
+        fail "OpenSpec update skipped. Include propose, apply and archive in the global custom workflows, or choose the core profile, then rerun."
+      fi
+      ;;
+    *)
+      fail "Unsupported OpenSpec profile value: $OPENSPEC_PROFILE"
+      ;;
+  esac
   info "Refreshing generated OpenSpec files"
   openspec update . --force
 else
@@ -183,21 +237,38 @@ fi
 
 step "[4/9] Installing Matt Pocock project Skills"
 
-npx --yes skills@latest add mattpocock/skills \
-  --skill setup-matt-pocock-skills \
-  --skill grill-with-docs \
-  --skill grilling \
-  --skill domain-modeling \
-  --skill codebase-design \
-  --skill tdd \
-  --skill diagnosing-bugs \
-  --skill code-review \
-  --skill writing-for-agents \
-  --agent codex \
-  --copy \
-  --yes
+REQUIRED_MATT_SKILLS=(
+  "setup-matt-pocock-skills"
+  "grill-with-docs"
+  "grilling"
+  "domain-modeling"
+  "codebase-design"
+  "tdd"
+  "diagnosing-bugs"
+  "code-review"
+  "writing-for-agents"
+)
 
-ok "Matt Pocock Skills install command completed"
+MISSING_MATT_SKILL_ARGS=()
+for skill in "${REQUIRED_MATT_SKILLS[@]}"; do
+  skill_dir=".agents/skills/${skill}"
+  if [ -e "$skill_dir" ] || [ -L "$skill_dir" ]; then
+    info "Preserved existing skill path: $skill_dir"
+  else
+    MISSING_MATT_SKILL_ARGS+=(--skill "$skill")
+  fi
+done
+
+if [ "${#MISSING_MATT_SKILL_ARGS[@]}" -gt 0 ]; then
+  npx --yes skills@latest add mattpocock/skills \
+    "${MISSING_MATT_SKILL_ARGS[@]}" \
+    --agent codex \
+    --copy \
+    --yes
+  ok "Missing Matt Pocock Skills install command completed"
+else
+  info "No missing Matt Pocock skill paths to install"
+fi
 
 # ------------------------------------------------------------
 # 5. Create directories
@@ -278,11 +349,11 @@ if create_if_missing "AGENTS.md"; then
 
 Matt Pocock 的 `grill-with-docs` / `domain-modeling` 会在需要时维护：
 
-- `CONTEXT.md`
-- `CONTEXT-MAP.md`（多 bounded-context 项目按需）
+- `GLOSSARY.md`
+- `GLOSSARY-MAP.md`（多 bounded-context 项目按需）
 - `docs/adr/`
 
-不要仅为了“目录完整”创建空的 `CONTEXT.md`。
+不要仅为了“目录完整”创建空的 `GLOSSARY.md`。
 
 ## OpenSpec 工作流
 
@@ -1093,18 +1164,6 @@ for skill in "${REQUIRED_OPENSPEC_SKILLS[@]}"; do
   fi
 done
 
-REQUIRED_MATT_SKILLS=(
-  "setup-matt-pocock-skills"
-  "grill-with-docs"
-  "grilling"
-  "domain-modeling"
-  "codebase-design"
-  "tdd"
-  "diagnosing-bugs"
-  "code-review"
-  "writing-for-agents"
-)
-
 for skill in "${REQUIRED_MATT_SKILLS[@]}"; do
   if [ -f ".agents/skills/${skill}/SKILL.md" ]; then
     ok ".agents/skills/${skill}"
@@ -1127,16 +1186,31 @@ fi
 step "[9/9] Project readiness report"
 
 PLACEHOLDER_COUNT=0
+DOCUMENTS_OK=1
 
 check_placeholder() {
   local file="$1"
   local description="$2"
 
-  if [ -f "$file" ] && grep -q "$PLACEHOLDER_MARKER" "$file"; then
+  local grep_status
+
+  if [ ! -e "$file" ] && [ ! -L "$file" ]; then
+    printf "  [MISSING]     %-28s\n" "$file"
+    DOCUMENTS_OK=0
+  elif [ ! -f "$file" ] || [ ! -r "$file" ]; then
+    printf "  [INVALID]     %-28s Expected a readable regular file\n" "$file"
+    DOCUMENTS_OK=0
+  elif grep -q "$PLACEHOLDER_MARKER" "$file"; then
     printf "  [PLACEHOLDER] %-28s %s\n" "$file" "$description"
     PLACEHOLDER_COUNT=$((PLACEHOLDER_COUNT + 1))
   else
-    printf "  [READY]       %-28s\n" "$file"
+    grep_status=$?
+    if [ "$grep_status" -eq 1 ]; then
+      printf "  [READY]       %-28s\n" "$file"
+    else
+      printf "  [INVALID]     %-28s Placeholder scan failed\n" "$file"
+      DOCUMENTS_OK=0
+    fi
   fi
 }
 
@@ -1156,10 +1230,14 @@ for file in \
   "docs/adr/README.md" \
   ".github/PULL_REQUEST_TEMPLATE.md"
 do
-  if [ -f "$file" ]; then
+  if [ -f "$file" ] && [ -r "$file" ]; then
     printf "  [READY]       %s\n" "$file"
+  elif [ -e "$file" ] || [ -L "$file" ]; then
+    printf "  [INVALID]     %s Expected a readable regular file\n" "$file"
+    DOCUMENTS_OK=0
   else
     printf "  [MISSING]     %s\n" "$file"
+    DOCUMENTS_OK=0
   fi
 done
 
@@ -1176,7 +1254,7 @@ done
 
 echo ""
 echo "Notes:"
-echo "  - CONTEXT.md is intentionally not pre-created."
+echo "  - GLOSSARY.md is intentionally not pre-created."
 echo "    Let grill-with-docs/domain-modeling create or maintain it when domain terms are resolved."
 echo "  - LICENSE should only be added after you choose the actual license."
 echo "  - .env.example is useful only when the project actually has environment variables."
@@ -1196,18 +1274,16 @@ else
   warn "Matt Pocock Skills need attention"
 fi
 
-if [ "$PLACEHOLDER_COUNT" -gt 0 ]; then
-  echo ""
+echo ""
+if [ "$OPEN_SPEC_OK" -ne 1 ] || [ "$MATT_SKILLS_OK" -ne 1 ] || [ "$DOCUMENTS_OK" -ne 1 ]; then
+  echo "STATUS: INITIALIZATION INCOMPLETE"
+  fail "Required tooling or documents failed verification. Resolve the warnings above and rerun."
+elif [ "$PLACEHOLDER_COUNT" -gt 0 ]; then
   echo "STATUS: INITIALIZED, NOT READY FOR DEVELOPMENT"
   echo ""
   echo "${PLACEHOLDER_COUNT} placeholder document(s) still need completion."
 else
-  echo ""
-  if [ "$OPEN_SPEC_OK" -eq 1 ] && [ "$MATT_SKILLS_OK" -eq 1 ]; then
-    echo "STATUS: READY FOR DEVELOPMENT"
-  else
-    echo "STATUS: DOCUMENTS READY, TOOLING NEEDS ATTENTION"
-  fi
+  echo "STATUS: READY FOR DEVELOPMENT"
 fi
 
 echo ""
@@ -1217,7 +1293,8 @@ echo '  1. Open/restart Codex in this repository.'
 echo '  2. Run: $setup-matt-pocock-skills'
 echo '  3. Ask Codex to complete the five PLACEHOLDER:REPLACE_ME documents.'
 echo '  4. Verify no placeholders remain:'
-echo '       grep -R "PLACEHOLDER:REPLACE_ME" --exclude-dir=.git --exclude-dir=node_modules .'
+echo '       grep -n "PLACEHOLDER:REPLACE_ME" AGENTS.md README.md CHANGELOG.md docs/PROJECT.md docs/ARCHITECTURE.md'
+echo '       # Exit 1 with no output means no markers remain; exit 2 indicates an error.'
 echo '  5. Start complex requirement discovery with: $grill-with-docs'
 echo '  6. Create the OpenSpec change with: $openspec-propose'
 echo ""

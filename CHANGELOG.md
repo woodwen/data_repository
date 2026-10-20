@@ -2,9 +2,31 @@
 
 本记录只描述初始化脚本的变化；脚本生成的项目 `CHANGELOG.md` 用于记录各项目自身的变化。
 
+## 2.2.0 — 2026-10-20
+
+统一脚本：`init-codex-project.sh`。
+
+### 变更
+
+- 将 2.1.0 的配置检查、就绪状态、文档保护及领域文档指引合并到 `init-codex-project.sh`，删除 `init-codex-project-v2.1.0.sh`，后续只维护一个入口。
+- 同步脚本版本、使用示例及 README，将失效的 `INIT-CODEX-PROJECT-CHANGELOG.md` 引用改为实际的 `CHANGELOG.md`。
+- Matt Pocock 技能改为只安装缺失路径，保留已有定制。已有目录、文件或符号链接不自动覆盖；缺少 `SKILL.md` 时由最终检查报错。需要更新已有技能时，保存定制后手动执行对应安装命令。
+
+### 修复
+
+- 已有 OpenSpec 项目在刷新前检查全局 profile：允许 `core`，或包含 `propose`、`apply`、`archive` 的 `custom`；读取失败、未知 profile、无效或不完整的 workflows 均提前停止，防止必需技能被更新操作删除后才报错。
+- 保留首次初始化的 `--profile core` 行为；脚本不自动修改全局 profile/workflows。检查仍在全局 OpenSpec 安装之后，失败不回滚此前的安装。
+
+### 验证
+
+- `bash -n init-codex-project.sh`、`git diff --check` 通过。
+- 新增 `tests/test_init_codex_project.py`，11 项回归测试通过：覆盖首次初始化、重复运行保留定制技能和文档、仅补齐缺失技能、配置异常提前停止、兼容 custom profile、悬空技能链接保护。
+- 本机 OpenSpec 1.14.1 的 5 个临时目录场景通过：首次初始化、core 重跑、不完整 custom 拦截、兼容 custom 重跑、commands delivery 拦截。确认被拦截时项目文件不变，正常重跑保留 Matt Pocock 定制技能及已有文档；兼容 custom 仍按全局配置移除未选择的非必需 OpenSpec 技能。
+- 未执行全局 npm 升级或联网 Skills 安装：回归测试替代 npm、npx 和 OpenSpec，真实 OpenSpec 验证仅替代 npm、npx，并隔离全局配置与数据目录。
+
 ## 2.1.0 — 2026-10-03
 
-脚本：`init-codex-project-v2.1.0.sh`。原版 `init-codex-project.sh`（2.0.0）保持不变。
+当时发布脚本：`init-codex-project-v2.1.0.sh`，原版 `init-codex-project.sh`（2.0.0）保持不变。自 2.2.0 起两者已合并；以下为历史记录。
 
 ### 修复
 
