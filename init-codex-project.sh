@@ -4,7 +4,7 @@ set -Eeuo pipefail
 
 # ============================================================
 # Codex Project Initializer
-# Version: 2.2.0
+# Version: 2.3.0
 # Release date: 2026-10-20
 # Update history: CHANGELOG.md
 #
@@ -25,7 +25,21 @@ set -Eeuo pipefail
 # Run this script from the repository root.
 # ============================================================
 
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
+OPENSPEC_VERSION="1.14.3"
+SKILLS_CLI_VERSION="1.7.4"
+MATT_SKILLS_REF="5beb35b040e3de97e54fa9e386d7e42d15c295c2"
+REQUIRED_MATT_SKILLS=(
+  "setup-matt-pocock-skills"
+  "grill-with-docs"
+  "grilling"
+  "domain-modeling"
+  "codebase-design"
+  "tdd"
+  "diagnosing-bugs"
+  "code-review"
+  "writing-for-agents"
+)
 PLACEHOLDER_MARKER="PLACEHOLDER:REPLACE_ME"
 
 # ------------------------------------------------------------
@@ -75,115 +89,104 @@ has_glob_match() {
 }
 
 # ------------------------------------------------------------
-# Header
+# Arguments and failure reporting
 # ------------------------------------------------------------
 
-section "Codex Project Initializer v${SCRIPT_VERSION}"
+MODE="initialize"
+SHOW_HELP=0
+PHASE="arguments"
+BACKUP_DIR=""
+BACKUP_COMPLETE=0
+GLOBAL_INSTALL_ATTEMPTED=0
+GLOBAL_INSTALL_COMPLETE=0
 
-echo "Project:"
-echo "  $(pwd)"
-
-# ------------------------------------------------------------
-# 1. Safety / prerequisites
-# ------------------------------------------------------------
-
-step "[1/9] Checking environment"
-
-if [ "$(pwd)" = "/" ]; then
-  fail "Do not run this script from /."
-fi
-
-if [ "$(pwd)" = "$HOME" ]; then
-  fail "Do not run this script directly from your home directory."
-fi
-
-for cmd in node npm npx; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    fail "Required command not found: $cmd"
+report_failure() {
+  local status="$1"
+  if [ "$status" -eq 0 ]; then
+    return
   fi
+  echo "  [ERROR] Failed during: $PHASE (exit $status). No automatic rollback was performed." >&2
+  if [ "$GLOBAL_INSTALL_COMPLETE" -eq 1 ]; then
+    echo "  [WARN] Global OpenSpec installation completed before this failure." >&2
+  elif [ "$GLOBAL_INSTALL_ATTEMPTED" -eq 1 ]; then
+    echo "  [WARN] Global OpenSpec installation was attempted and may have changed the npm prefix." >&2
+  fi
+  if [ -n "$BACKUP_DIR" ]; then
+    echo "  [INFO] Backup: $BACKUP_DIR" >&2
+    if [ "$BACKUP_COMPLETE" -eq 1 ]; then
+      echo "  [INFO] Compare manifest.json and saved .agents/skills with the project; restore only listed paths after reviewing partial changes." >&2
+      echo "  [INFO] Review skills-lock.json separately; it can include unrelated skills. See README for recovery steps." >&2
+    else
+      echo "  [WARN] Backup is incomplete; do not use it as a complete restore point." >&2
+    fi
+  fi
+}
+trap 'report_failure "$?"' EXIT
+
+for arg in "$@"; do
+  case "$arg" in
+    --upgrade) MODE="upgrade" ;;
+    --help) SHOW_HELP=1 ;;
+    *) fail "Unknown argument: $arg. Use --help." ;;
+  esac
 done
+if [ "$SHOW_HELP" -eq 1 ]; then
+  cat <<'HELP'
+Usage: bash init-codex-project.sh [--upgrade | --help]
+Run from the target project root with Node.js >=22.20.0 and Git.
+Default: install missing dependencies, reuse supported OpenSpec, preserve existing skills.
+--upgrade: upgrade older OpenSpec to the pinned target and refresh the nine Matt Pocock skills after backup.
+Newer OpenSpec is never downgraded. Backups remain in .init-codex-backups/.
+HELP
+  exit 0
+fi
 
-node <<'NODE_CHECK'
-const [major, minor] = process.versions.node.split(".").map(Number);
+# ------------------------------------------------------------
+# Preflight helpers
+# ------------------------------------------------------------
 
-const valid =
-  major > 20 ||
-  (major === 20 && minor >= 19);
-
-if (!valid) {
-  console.error(
-    `ERROR: Node.js ${process.versions.node} is too old. ` +
-    `OpenSpec requires Node.js >= 20.19.0.`
-  );
+compare_openspec_version() {
+  node - "$1" "$OPENSPEC_VERSION" <<'VERSION_CHECK'
+const [actual, target] = process.argv.slice(2);
+if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(actual)) {
+  console.error(`ERROR: Cannot parse stable OpenSpec version: ${actual}`);
   process.exit(1);
 }
-NODE_CHECK
+const a = actual.split(".").map(Number);
+const b = target.split(".").map(Number);
+let result = 0;
+for (let i = 0; i < 3; i++) {
+  if (a[i] !== b[i]) {
+    result = a[i] < b[i] ? -1 : 1;
+    break;
+  }
+}
+console.log(result);
+VERSION_CHECK
+}
 
-ok "Node.js $(node --version)"
-ok "npm $(npm --version)"
-
-if command -v git >/dev/null 2>&1; then
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    ok "Git repository detected"
-  else
-    warn "Current directory is not a Git repository yet"
+check_openspec_config() {
+  if ! OPENSPEC_DELIVERY="$(openspec config get delivery)"; then
+    fail "Cannot read OpenSpec delivery configuration. Resolve this with the installed CLI before upgrading."
   fi
-else
-  warn "git is not installed; project initialization can continue, but Git workflow checks are unavailable"
-fi
-
-# ------------------------------------------------------------
-# 2. Install / update OpenSpec
-# ------------------------------------------------------------
-
-step "[2/9] Installing / updating OpenSpec"
-
-npm install -g @fission-ai/openspec@latest
-
-if ! command -v openspec >/dev/null 2>&1; then
-  fail "OpenSpec installed but 'openspec' is not available on PATH."
-fi
-
-ok "OpenSpec $(openspec --version)"
-
-# ------------------------------------------------------------
-# 3. Initialize / refresh OpenSpec
-# ------------------------------------------------------------
-
-step "[3/9] Initializing OpenSpec"
-
-# The shared agents target only supports skills. Check before init/update
-# so a global commands-only setting cannot silently omit or remove them.
-if ! OPENSPEC_DELIVERY="$(openspec config get delivery)"; then
-  fail "Cannot read OpenSpec delivery configuration."
-fi
-case "$OPENSPEC_DELIVERY" in
-  skills|both) ;;
-  commands)
-    fail "OpenSpec delivery=commands cannot generate .agents/skills. Set delivery to skills or both (global setting), then rerun: openspec config set delivery both"
-    ;;
-  *)
-    fail "Unsupported OpenSpec delivery value: $OPENSPEC_DELIVERY"
-    ;;
-esac
-
-# Use the shared "agents" target intentionally.
-# Current Codex discovers repository skills from .agents/skills.
-# This keeps OpenSpec and third-party project skills in one repo-level location.
-if [ -f "openspec/config.yaml" ]; then
-  info "Existing openspec/config.yaml detected"
-  # Unlike init --profile core, update follows the global profile.
-  # Reject incompatible workflows before update can remove required skills.
-  if ! OPENSPEC_PROFILE="$(openspec config get profile)"; then
-    fail "Cannot read OpenSpec profile configuration."
-  fi
-  case "$OPENSPEC_PROFILE" in
-    core) ;;
-    custom)
-      if ! OPENSPEC_WORKFLOWS="$(openspec config get workflows)"; then
-        fail "Cannot read OpenSpec workflows configuration."
-      fi
-      if ! node - "$OPENSPEC_WORKFLOWS" <<'WORKFLOW_CHECK'
+  case "$OPENSPEC_DELIVERY" in
+    skills|both) ;;
+    commands)
+      fail "OpenSpec delivery=commands cannot generate .agents/skills. Set delivery to skills or both (global setting), then rerun: openspec config set delivery both"
+      ;;
+    *) fail "Unsupported OpenSpec delivery value: $OPENSPEC_DELIVERY" ;;
+  esac
+  if [ -f "openspec/config.yaml" ]; then
+    if ! OPENSPEC_PROFILE="$(openspec config get profile)"; then
+      fail "Cannot read OpenSpec profile configuration. Resolve this with the installed CLI before upgrading."
+    fi
+    case "$OPENSPEC_PROFILE" in
+      core) ;;
+      custom)
+        if ! OPENSPEC_WORKFLOWS="$(openspec config get workflows)"; then
+          fail "Cannot read OpenSpec workflows configuration."
+        fi
+        if ! node - "$OPENSPEC_WORKFLOWS" <<'WORKFLOW_CHECK'
 let workflows;
 try {
   workflows = JSON.parse(process.argv[2]);
@@ -201,14 +204,176 @@ if (missing.length > 0) {
   process.exit(1);
 }
 WORKFLOW_CHECK
-      then
-        fail "OpenSpec update skipped. Include propose, apply and archive in the global custom workflows, or choose the core profile, then rerun."
-      fi
-      ;;
-    *)
-      fail "Unsupported OpenSpec profile value: $OPENSPEC_PROFILE"
-      ;;
-  esac
+        then
+          fail "OpenSpec update skipped. Include propose, apply and archive in the global custom workflows, or choose the core profile, then rerun."
+        fi
+        ;;
+      *) fail "Unsupported OpenSpec profile value: $OPENSPEC_PROFILE" ;;
+    esac
+  fi
+}
+
+prepare_skill_upgrade() {
+  node - "$1" "$OPENSPEC_VERSION" "$SKILLS_CLI_VERSION" "$MATT_SKILLS_REF" "${REQUIRED_MATT_SKILLS[@]}" <<'BACKUP'
+const fs = require("node:fs");
+const path = require("node:path");
+const [action, openspec, skillsCli, ref, ...names] = process.argv.slice(2);
+function check(file, type) {
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !(type === "directory" ? stat.isDirectory() : stat.isFile())) {
+    throw new Error(`Unsupported upgrade path: ${file}. Resolve links or file types manually.`);
+  }
+  return true;
+}
+try {
+  for (const dir of [".agents", ".agents/skills", ".init-codex-backups"]) check(dir, "directory");
+  const skills = names.map(name => {
+    const file = `.agents/skills/${name}`;
+    return { name, path: file, existed: check(file, "directory") };
+  });
+  const lockFile = { path: "skills-lock.json", existed: check("skills-lock.json", "file") };
+  if (lockFile.existed) {
+    const lock = JSON.parse(fs.readFileSync(lockFile.path, "utf8"));
+    if (lock?.version !== 1 || !lock.skills || typeof lock.skills !== "object" || Array.isArray(lock.skills)) {
+      throw new Error("Unsupported skills-lock.json format; review it before upgrading.");
+    }
+    for (const name of names) {
+      if (Object.hasOwn(lock.skills, name) && lock.skills[name]?.source !== "mattpocock/skills") {
+        throw new Error(`Skill source conflict for ${name}; preserve the existing skill and resolve ownership manually.`);
+      }
+    }
+  }
+  if (action === "backup") {
+    const base = path.resolve(".init-codex-backups");
+    fs.mkdirSync(base, { recursive: true });
+    const backup = fs.mkdtempSync(path.join(base, "run-"));
+    console.log(backup);
+    for (const skill of skills.filter(skill => skill.existed)) {
+      fs.mkdirSync(path.dirname(path.join(backup, skill.path)), { recursive: true });
+      fs.cpSync(skill.path, path.join(backup, skill.path), {
+        recursive: true, dereference: false, verbatimSymlinks: true, preserveTimestamps: true,
+        filter(source) {
+          const stat = fs.lstatSync(source);
+          if (!stat.isFile() && !stat.isDirectory() && !stat.isSymbolicLink()) {
+            throw new Error(`Unsupported backup entry: ${source}`);
+          }
+          return true;
+        }
+      });
+    }
+    if (lockFile.existed) fs.copyFileSync(lockFile.path, path.join(backup, lockFile.path));
+    fs.writeFileSync(path.join(backup, "manifest.json"), JSON.stringify({
+      project: process.cwd(), createdAt: new Date().toISOString(),
+      targets: { openspec, skillsCli, mattSkillsRef: ref }, skills, lockFile
+    }, null, 2) + "\n");
+  }
+} catch (error) {
+  console.error(`ERROR: ${error.message}`);
+  process.exit(1);
+}
+BACKUP
+}
+
+# ------------------------------------------------------------
+# 1. Safety / prerequisites
+# ------------------------------------------------------------
+
+section "Codex Project Initializer v${SCRIPT_VERSION}"
+echo "Project: $(pwd)"
+echo "Mode: $MODE"
+info "Targets: OpenSpec $OPENSPEC_VERSION; Skills CLI $SKILLS_CLI_VERSION; Matt Pocock $MATT_SKILLS_REF"
+PHASE="environment preflight"
+step "[1/9] Checking environment"
+
+if [ "$(pwd)" = "/" ] || [ "$(pwd)" = "$HOME" ]; then
+  fail "Run this script from a project directory, not / or your home directory."
+fi
+for cmd in node npm npx git mkdir cat grep; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    fail "Required command not found: $cmd"
+  fi
+done
+node <<'NODE_CHECK'
+const [major, minor] = process.versions.node.split(".").map(Number);
+if (!(major > 22 || (major === 22 && minor >= 20))) {
+  console.error(`ERROR: Node.js ${process.versions.node} is too old. Skills CLI requires Node.js >=22.20.0.`);
+  process.exit(1);
+}
+NODE_CHECK
+ok "Node.js $(node --version)"
+ok "npm $(npm --version)"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  ok "Git repository detected"
+else
+  warn "Current directory is not a Git repository yet"
+fi
+
+PHASE="dependency and configuration preflight"
+OPENSPEC_BEFORE="missing"
+INSTALL_OPENSPEC=1
+if command -v openspec >/dev/null 2>&1; then
+  if ! OPENSPEC_BEFORE="$(openspec --version)"; then
+    fail "Cannot read installed OpenSpec version."
+  fi
+  VERSION_COMPARISON="$(compare_openspec_version "$OPENSPEC_BEFORE")"
+  if [ "$VERSION_COMPARISON" -lt 0 ]; then
+    if [ "$MODE" != "upgrade" ]; then
+      fail "OpenSpec $OPENSPEC_BEFORE is older than $OPENSPEC_VERSION. Rerun with --upgrade."
+    fi
+  else
+    INSTALL_OPENSPEC=0
+  fi
+  check_openspec_config
+fi
+info "OpenSpec before: $OPENSPEC_BEFORE"
+
+if [ "$MODE" = "upgrade" ]; then
+  prepare_skill_upgrade check
+  PHASE="skill backup"
+  BACKUP_DIR="$(prepare_skill_upgrade backup)"
+  BACKUP_COMPLETE=1
+  info "Backup: $BACKUP_DIR"
+fi
+
+# ------------------------------------------------------------
+# 2. Install / reuse OpenSpec
+# ------------------------------------------------------------
+
+PHASE="global OpenSpec installation"
+step "[2/9] Installing / reusing OpenSpec"
+if [ "$INSTALL_OPENSPEC" -eq 1 ]; then
+  GLOBAL_INSTALL_ATTEMPTED=1
+  npm install -g "@fission-ai/openspec@${OPENSPEC_VERSION}"
+  GLOBAL_INSTALL_COMPLETE=1
+  hash -r
+  if ! command -v openspec >/dev/null 2>&1; then
+    fail "OpenSpec installed but 'openspec' is not available on PATH."
+  fi
+  OPENSPEC_AFTER="$(openspec --version)"
+  if [ "$OPENSPEC_AFTER" != "$OPENSPEC_VERSION" ]; then
+    fail "Expected OpenSpec $OPENSPEC_VERSION after installation, got $OPENSPEC_AFTER. Check npm prefix and PATH."
+  fi
+else
+  OPENSPEC_AFTER="$OPENSPEC_BEFORE"
+  info "Reusing OpenSpec $OPENSPEC_AFTER; no global installation or downgrade"
+fi
+ok "OpenSpec: $OPENSPEC_BEFORE -> $OPENSPEC_AFTER"
+
+# ------------------------------------------------------------
+# 3. Initialize / refresh OpenSpec
+# ------------------------------------------------------------
+
+PHASE="OpenSpec configuration recheck"
+check_openspec_config
+PHASE="project OpenSpec initialization / refresh"
+step "[3/9] Initializing OpenSpec"
+if [ -f "openspec/config.yaml" ]; then
   info "Refreshing generated OpenSpec files"
   openspec update . --force
 else
@@ -220,9 +385,6 @@ else
     --no-copilot-cloud
 fi
 
-# If this is an older repo that was initialized only for the OpenSpec "codex"
-# adapter, update may leave OpenSpec skills outside .agents/skills.
-# Do not delete or migrate user files automatically; report this later.
 if has_glob_match ".agents/skills/openspec-*/SKILL.md"; then
   ok "OpenSpec skills found under .agents/skills"
 else
@@ -232,43 +394,38 @@ else
 fi
 
 # ------------------------------------------------------------
-# 4. Install Matt Pocock project Skills
+# 4. Install / refresh Matt Pocock project Skills
 # ------------------------------------------------------------
 
+PHASE="Matt Pocock skill installation"
 step "[4/9] Installing Matt Pocock project Skills"
-
-REQUIRED_MATT_SKILLS=(
-  "setup-matt-pocock-skills"
-  "grill-with-docs"
-  "grilling"
-  "domain-modeling"
-  "codebase-design"
-  "tdd"
-  "diagnosing-bugs"
-  "code-review"
-  "writing-for-agents"
-)
-
-MISSING_MATT_SKILL_ARGS=()
+MATT_SKILL_ARGS=()
 for skill in "${REQUIRED_MATT_SKILLS[@]}"; do
   skill_dir=".agents/skills/${skill}"
-  if [ -e "$skill_dir" ] || [ -L "$skill_dir" ]; then
+  if [ "$MODE" = "upgrade" ]; then
+    info "Selected for refresh/install: $skill_dir"
+    MATT_SKILL_ARGS+=(--skill "$skill")
+  elif [ -e "$skill_dir" ] || [ -L "$skill_dir" ]; then
     info "Preserved existing skill path: $skill_dir"
   else
-    MISSING_MATT_SKILL_ARGS+=(--skill "$skill")
+    info "Selected for installation: $skill_dir"
+    MATT_SKILL_ARGS+=(--skill "$skill")
   fi
 done
-
-if [ "${#MISSING_MATT_SKILL_ARGS[@]}" -gt 0 ]; then
-  npx --yes skills@latest add mattpocock/skills \
-    "${MISSING_MATT_SKILL_ARGS[@]}" \
+if [ "${#MATT_SKILL_ARGS[@]}" -gt 0 ]; then
+  # Skills CLI 1.7.4 only reports per-skill failures as nonzero in JSON mode.
+  npx --yes "skills@${SKILLS_CLI_VERSION}" add "https://github.com/mattpocock/skills/tree/${MATT_SKILLS_REF}" \
+    "${MATT_SKILL_ARGS[@]}" \
     --agent codex \
     --copy \
-    --yes
-  ok "Missing Matt Pocock Skills install command completed"
+    --yes \
+    --json
+  ok "Matt Pocock Skills install command completed"
 else
   info "No missing Matt Pocock skill paths to install"
 fi
+
+PHASE="project documents"
 
 # ------------------------------------------------------------
 # 5. Create directories
@@ -1137,6 +1294,7 @@ fi
 # 8. Verification
 # ------------------------------------------------------------
 
+PHASE="tooling verification"
 step "[8/9] Verifying OpenSpec and Skills"
 
 OPEN_SPEC_OK=1
@@ -1183,6 +1341,7 @@ fi
 # 9. Placeholder / readiness report
 # ------------------------------------------------------------
 
+PHASE="readiness verification"
 step "[9/9] Project readiness report"
 
 PLACEHOLDER_COUNT=0

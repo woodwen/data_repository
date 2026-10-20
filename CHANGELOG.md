@@ -2,6 +2,27 @@
 
 本记录只描述初始化脚本的变化；脚本生成的项目 `CHANGELOG.md` 用于记录各项目自身的变化。
 
+## 2.3.0 — 2026-10-20
+
+OpenSpec Change: `update-initializer-install-strategy`
+
+### 变更
+
+- 固定 OpenSpec 1.14.3、Skills CLI 1.7.4 和 Matt Pocock 提交 `5beb35b040e3de97e54fa9e386d7e42d15c295c2`；不再安装浮动 latest/main。
+- Node.js 最低版本调整为 22.20.0，Git 改为必需，均在安装和项目写入前检查。脚本不会升级 Node.js。
+- 默认安装缺失 OpenSpec、复用目标或更高版本；已有旧版本时提示显式升级，不自动降级较新版本。
+- 新增 `--upgrade`：先备份受管理技能及项目锁文件，再升级旧 OpenSpec 并刷新原有 9 个 Matt Pocock 技能；默认模式继续保留定制。新增无安装副作用的 `--help`，未知参数提前拒绝。
+- 独占创建 `.init-codex-backups/run-*`，保存版本、来源、原路径和原先缺失项清单。阻止异常链接、损坏锁文件和已知其他来源的同名技能被升级覆盖。
+- 使用 Skills CLI JSON 模式，让逐技能安装失败或部分请求技能缺失返回非零；旧文件存在不能掩盖升级失败。
+- 配置在全局安装前检查、安装后复查；失败报告阶段、可能已发生的全局变更与备份位置，不宣称自动回滚。README 补充恢复步骤。
+
+### 验证
+
+- 34 项隔离回归测试通过（含 review 新增的旧文件残留、部分来源技能缺失场景）；新增行为先在旧实现上复现失败，再通过新实现。额外覆盖备份中的链接与特殊文件，确认不完整备份不会被标记为恢复点。
+- 已在 Node.js 24.21.0 临时环境确认固定 Skills CLI 可以通过固定提交 URL 安装全部 9 个技能，并在项目锁文件中记录来源 ref。
+- 完整脚本已通过真实首次安装、默认重跑、技能备份升级、旧 OpenSpec 默认拦截及升级、不兼容 profile 拦截；所有安装限定于临时 npm prefix、项目和 XDG 目录。
+- Bash 语法、OpenSpec 1.14.3 strict validation 和 git diff --check 通过；用户原有 Node.js 22.17.0、OpenSpec 1.14.1、配置及技能保持不变。
+
 ## 2.2.0 — 2026-10-20
 
 统一脚本：`init-codex-project.sh`。

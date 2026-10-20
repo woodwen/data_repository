@@ -6,19 +6,27 @@
 
 | 文件 | 版本 | 用途 |
 | --- | --- | --- |
-| [init-codex-project.sh](init-codex-project.sh) | 2.2.0 | 统一入口，包含 2.1.0 修复及重复运行保护 |
+| [init-codex-project.sh](init-codex-project.sh) | 2.3.0 | 固定依赖基线、默认保留及显式升级备份 |
 | [CHANGELOG.md](CHANGELOG.md) | — | 脚本更新记录、兼容性与验证范围 |
 
-以下说明对应 **2.2.0**。原 `init-codex-project-v2.1.0.sh` 已合并到统一入口，调用旧路径的命令需更新。
+以下说明对应 **2.3.0**。原 `init-codex-project-v2.1.0.sh` 已合并到统一入口，调用旧路径的命令需更新。
 
 ## 环境要求
 
 - Bash，以及常用的 `mkdir`、`cat`、`grep` 等命令。
-- `node`、`npm`、`npx` 可从 `PATH` 调用；脚本检查 Node.js 版本不低于 20.19.0。
+- `node`、`npm`、`npx`、`git` 可从 `PATH` 调用；Node.js 必须 **>=22.20.0**（Skills CLI 的要求）。脚本不会自动升级或切换 Node.js。
 - 可访问 npm 和 Skills 来源仓库的网络环境，以及 npm 全局安装目录的写权限。
-- Git 可选；未安装 Git 或当前目录尚未初始化 Git 时，脚本只提示警告。
+- Git 必需，用于获取技能来源；当前目录可以尚未初始化为 Git 仓库。
 
-脚本每次都会安装或更新 `@fission-ai/openspec@latest`，并通过 `skills@latest` 安装缺失的项目技能，因此实际依赖版本会随运行时间变化。OpenSpec 安装后，其命令也必须在 `PATH` 中可用。
+固定安装基线集中在脚本开头，脚本仍可独立复制执行：
+
+| 依赖 | 目标 |
+| --- | --- |
+| OpenSpec | `1.14.3` |
+| Skills CLI | `1.7.4` |
+| Matt Pocock skills | `5beb35b040e3de97e54fa9e386d7e42d15c295c2` |
+
+安装不使用 `@latest` 或浮动 main。已有 OpenSpec 高于目标时保留并报告实际版本，不代表更高版本已经过本脚本兼容性认证。OpenSpec 安装后，其命令必须在 `PATH` 中可用；npm prefix 与 PATH 不一致会报错。
 
 ## 快速开始
 
@@ -36,12 +44,28 @@ bash ./init-codex-project.sh
 
 初始化目标是运行命令时的当前目录。脚本没有目标目录参数，不会自动切换到脚本所在目录；禁止直接在 `/` 或用户主目录运行。
 
+```bash
+bash ./init-codex-project.sh --help
+bash ./init-codex-project.sh --upgrade
+```
+
+无参数运行保留已有技能。`--upgrade` 表示备份后刷新脚本管理的 9 个技能，并将低于基线的 OpenSpec 升级到固定目标；不是追随上游 latest。帮助无需安装依赖，未知参数会在写入前报错。
+
+| 状态 | 默认运行 | `--upgrade` |
+| --- | --- | --- |
+| OpenSpec 缺失 | 安装固定目标 | 安装固定目标 |
+| OpenSpec 低于目标 | 停止并提示显式升级 | 安装固定目标 |
+| OpenSpec 等于或高于目标 | 复用，不降级 | 复用，不降级 |
+| Matt 技能缺失 | 安装固定来源 | 安装固定来源 |
+| Matt 技能已有普通目录 | 原样保留 | 备份后刷新 |
+| Matt 技能路径异常或为链接 | 保留，按最终检查结果报告 | 写入前停止，手动处理 |
+
 ## 执行内容
 
-1. 检查环境，安装或更新全局 OpenSpec。
-2. 检查 OpenSpec 的全局 `delivery` 设置，允许 `skills` 或 `both`。
+1. 检查环境及现有 OpenSpec 版本；无法解析版本或默认模式遇到旧版本时停止。
+2. 已有 CLI 先检查全局 `delivery`，允许 `skills` 或 `both`；已有项目同时检查 profile/workflows。升级模式先验证路径、来源并完成备份，再安装必要的全局 OpenSpec；安装后重新检查配置。
 3. 已有 `openspec/config.yaml` 时，先检查全局 profile，再执行 `openspec update . --force`；允许 `core`，或包含 `propose`、`apply`、`archive` 的 `custom`。新项目使用 `agents` 目标、`core` profile 和简体中文指引初始化。
-4. 为 Codex 补齐以下项目技能，使用复制模式并保留已有路径：`setup-matt-pocock-skills`、`grill-with-docs`、`grilling`、`domain-modeling`、`codebase-design`、`tdd`、`diagnosing-bugs`、`code-review`、`writing-for-agents`。
+4. 为 Codex 安装以下项目技能，默认保留已有路径，升级模式备份后刷新：`setup-matt-pocock-skills`、`grill-with-docs`、`grilling`、`domain-modeling`、`codebase-design`、`tdd`、`diagnosing-bugs`、`code-review`、`writing-for-agents`。
 5. 创建缺失的文档和基础文件，检查必需技能、文档及占位标记。
 
 主要产物：
@@ -61,7 +85,7 @@ bash ./init-codex-project.sh
 └── CHANGELOG.md                    # 占位文档
 ```
 
-已有文档、基础文件及 Matt Pocock 技能会保留；OpenSpec 生成文件仍会刷新。脚本不会自动提交或推送 Git，也不会自动归档 OpenSpec change。
+已有文档和基础文件会保留；默认模式保留 Matt Pocock 技能，升级模式在备份后刷新。两个模式都会刷新项目的 OpenSpec 生成文件。脚本不会自动提交或推送 Git，也不会自动归档 OpenSpec change。
 
 `GLOSSARY.md` / `GLOSSARY-MAP.md` 由后续领域建模按需创建。初始化后运行 `$setup-matt-pocock-skills`，完成技能的项目配置。
 
@@ -93,7 +117,7 @@ grep -n "PLACEHOLDER:REPLACE_ME" AGENTS.md README.md CHANGELOG.md docs/PROJECT.m
 openspec config set delivery both
 ```
 
-这是**全局设置**，会影响其他项目的后续 OpenSpec 操作。脚本只读取该设置，不自动修改它。检查发生在全局 OpenSpec 安装/更新之后，失败不会回滚此前的安装。
+这是**全局设置**，会影响其他项目的后续 OpenSpec 操作。脚本只读取该设置，不自动修改它。已有 CLI 在安装前检查，安装后再复查；旧 CLI 无法读取配置时停止，需先单独处理。安装后的检查失败不会回滚已发生的全局安装。
 
 ### 旧项目缺少共享目录中的 OpenSpec 技能
 
@@ -103,13 +127,22 @@ openspec config set delivery both
 
 可以补齐缺失文档及 Matt Pocock 技能，并重新执行检查。已有技能路径即使不完整或为悬空链接也会保留；缺少 `SKILL.md` 时最终检查会报错，需要手动处理。
 
-如需更新某个已有技能，先保存自己的定制内容，再显式执行，例如：
+需要刷新时使用 `--upgrade`。该模式只处理上述 9 个名称；锁文件明确指向其他来源的同名技能会触发停止，不自动接管。没有锁文件的旧技能可以在备份后升级。插件和用户级技能不在更新范围内；本脚本也不执行无筛选的 `skills update`。
 
-```bash
-npx --yes skills@latest add mattpocock/skills --skill tdd --agent codex --copy --yes
-```
+### 升级备份与恢复
 
-该命令会替换目标技能目录。脚本每次仍会更新全局 OpenSpec 和项目的 OpenSpec 生成文件，上游 `openspec update` 也可能执行配置迁移。
+`--upgrade` 在任何全局安装、项目刷新和技能替换前创建 `.init-codex-backups/run-<唯一值>/`，保存已有受管理技能、原 `skills-lock.json` 和 `manifest.json`。清单包含目标版本、来源提交、原路径及原先缺失项。备份不位于技能发现目录，多次运行不会覆盖旧备份；脚本不自动删除备份或修改 `.gitignore`。
+
+升级前遇到技能目录或父路径、锁文件、备份父路径的异常文件类型或符号链接会停止。锁文件损坏或格式不支持时也先停止。技能目录内部的链接按链接备份，不读取其指向的外部内容；FIFO 等不支持的特殊文件会导致备份失败，不会被静默遗漏。
+
+失败输出包含阶段、退出码及备份路径。仅当提示备份完成且清单存在时，按以下步骤人工恢复：
+
+1. 比较清单与当前项目；先另存安装中断后产生的新内容。
+2. 将需要恢复的当前技能目录移到别处，再将备份中对应的 `.agents/skills/<名称>` 完整复制回原路径，避免合并残留文件。清单标为原先缺失的技能不在备份中，是否移除由你确认。
+3. 单独比较 `skills-lock.json`。只有确认没有其他需保留的新条目时才整体恢复；否则只恢复对应技能条目。原先没有锁文件时，不要盲目删除包含其他技能的新锁文件。
+4. 完成恢复后核对文件差异，再运行默认检查。备份本身保留到确认恢复完成。
+
+备份失败时不执行后续安装；安装中断时可能已部分更新，脚本不自动回滚。备份范围是 Matt 技能和项目锁文件，不包括全局 npm 安装或 OpenSpec 生成文件；失败信息会说明全局 OpenSpec 安装是否已尝试/完成。
 
 ### OpenSpec 自定义 profile 缺少必需流程
 
@@ -124,4 +157,4 @@ bash -n init-codex-project.sh
 python3 -B -m unittest discover -s tests -v
 ```
 
-回归测试在临时目录运行，使用 npm、npx、OpenSpec 替身，不安装工具。真实 OpenSpec 的验证版本及边界见 [CHANGELOG.md](CHANGELOG.md)；未进行完整联网安装验证。
+回归测试在临时目录运行，使用 npm、npx、OpenSpec 替身及模拟 Node.js 版本，不安装工具。真实联网测试限定在临时 npm prefix、项目和 XDG 配置/缓存/状态目录，不修改用户原有全局工具。具体版本与验证结果见 [CHANGELOG.md](CHANGELOG.md)。
