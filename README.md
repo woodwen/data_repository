@@ -60,6 +60,57 @@ bash ./init-codex-project.sh --upgrade
 | Matt 技能已有普通目录 | 原样保留 | 备份后刷新 |
 | Matt 技能路径异常或为链接 | 保留，按最终检查结果报告 | 写入前停止，手动处理 |
 
+## 升级已有项目
+
+已有项目使用 `--upgrade`，升级目标见上方固定安装基线。按以下顺序操作，每一步检查通过后再继续。
+
+### 1. 检查环境和已有改动
+
+进入需要升级的项目，将示例路径替换为实际路径：
+
+```bash
+cd /path/to/your-project
+node --version
+openspec --version
+git status --short
+```
+
+Node.js 必须 >=22.20.0；版本不足时，先用自己的 Node.js 版本管理工具切换，再重新检查。切换后也应重新确认 `openspec` 是否可用，因为不同 Node.js 环境可能使用不同的 npm 全局安装目录；OpenSpec 缺失时脚本会安装固定版本。
+
+先保存已有改动，特别是定制过的技能和 OpenSpec 生成文件，以便核对升级差异。脚本会备份受管理的 Matt 技能和 `skills-lock.json`，但不会备份 OpenSpec 生成文件或全局 npm 安装；详见[升级备份与恢复](#升级备份与恢复)。
+
+### 2. 执行升级
+
+保持在目标项目根目录，调用本仓库脚本：
+
+```bash
+bash /path/to/data_repository/init-codex-project.sh --upgrade
+```
+
+脚本以**当前工作目录**为目标，不以脚本所在目录为目标。升级多个项目时，需要分别进入各项目执行；它们共用的全局 OpenSpec CLI 达到基线后会被复用，各项目的技能仍需分别刷新。
+
+升级模式会备份后刷新 `.agents/skills/` 中指定的 9 个 Matt 技能，并刷新项目 OpenSpec 生成文件。已有项目文档会保留，缺失的文档模板和基础文件会补建，因此运行后也需要检查新增文件。
+
+### 3. 验证升级结果
+
+脚本成功退出后执行：
+
+```bash
+openspec --version
+openspec validate --all --strict
+git diff --stat
+git diff --check
+git status --short
+```
+
+核对脚本输出中的实际版本、技能刷新列表及备份路径；查看 `git diff` 中的具体变化，并单独检查 `git status --short` 列出的未跟踪文件，`git diff --check` 不覆盖这些文件。若输出 `INITIALIZED, NOT READY FOR DEVELOPMENT`，按[初始化后的检查](#初始化后的检查)补全文档。安装失败时先按输出的失败阶段和备份路径排查，脚本不会自动回滚、提交或推送。
+
+### 旧目录与更新范围
+
+如果原项目的技能位于 `.codex/skills/`，脚本不会迁移、删除或刷新其中的旧副本。升级前后比较它与 `.agents/skills/` 的同名技能，先保留需要的定制内容，再决定如何处理重复副本；只有旧目录中的 OpenSpec 技能时，参照[旧项目缺少共享目录中的 OpenSpec 技能](#旧项目缺少共享目录中的-openspec-技能)及脚本提示补齐共享目录。
+
+用户级技能和插件不在脚本的更新范围内。`--upgrade` 使用脚本固定的版本和来源提交；如果希望跟进更高版本，先更新并验证脚本开头的 `OPENSPEC_VERSION`、`SKILLS_CLI_VERSION`、`MATT_SKILLS_REF` 及所选技能名称，再对已有项目执行升级。不要把重复运行 `--upgrade` 理解为自动获取上游最新版。
+
 ## 执行内容
 
 1. 检查环境及现有 OpenSpec 版本；无法解析版本或默认模式遇到旧版本时停止。
